@@ -8,10 +8,10 @@ Built to understand not just *how* these models work, but *where each one breaks
 
 - [x] Data pipeline — JSE price fetching via yfinance, ticker validation, cents (ZAc) → Rand conversion, log return calculation
 - [x] Historical Simulation VaR & Expected Shortfall
+- [x] Return distribution chart with VaR/ES thresholds
 - [ ] Parametric (Variance-Covariance) VaR
 - [ ] Monte Carlo VaR
 - [ ] Backtesting (Kupiec POF test)
-- [ ] Visualization dashboard
 
 ## Portfolio
 
@@ -42,6 +42,12 @@ An equal-weighted basket of 19 JSE Top 40-derived stocks, spanning banking, tele
 
 **2. Diversification does not remove fat tails.** Despite the volatility drop, the ratio of 99% VaR to 95% VaR stayed almost identical (~1.83x for both portfolios) — well above the ~1.4x a normal distribution would predict at those confidence levels. This suggests the fat-tail behavior is a *systematic* market-wide feature (all 19 stocks are still JSE equities, exposed to the same broad market shocks), not something diversification within a single asset class and market can diversify away. This is exactly why VaR/ES modelling and stress testing exist as a separate discipline from portfolio optimization — reducing volatility isn't the same as reducing tail risk.
 
+## Visualization
+
+![Portfolio P&L distribution with VaR/ES thresholds](output/return_distribution.png)
+
+The histogram shows the empirical distribution of daily portfolio P&L, with 95%/99% VaR and Expected Shortfall marked. The left tail extending further than a normal distribution would predict is the visual signature of the fat-tail finding above.
+
 ## Setup
 
 ```powershell
@@ -57,6 +63,7 @@ pip install -r requirements.txt
 ```powershell
 python src/data_loader.py       # fetch/cache price data, print return stats
 python src/var_historical.py    # compute Historical VaR & Expected Shortfall
+python src/visualize.py         # generate the P&L distribution chart
 ```
 
 ## Project structure
