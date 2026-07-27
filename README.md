@@ -54,7 +54,6 @@ At 95% confidence, Historical VaR is actually *below* the Normal-model predictio
 
 ![Portfolio P&L distribution with VaR/ES thresholds](output/return_distribution.png)
 
-*(Chart reflects the pre-cleaning dataset; will be regenerated against cleaned data.)*
 
 ## Setup
 
