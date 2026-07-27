@@ -48,4 +48,13 @@ def plot_return_distribution(returns, portfolio_value=PORTFOLIO_VALUE, save=True
     fig.tight_layout()
 
     if save:
-        out_path = OUTPUT_DIR
+        out_path = OUTPUT_DIR / "return_distribution.png"
+        fig.savefig(out_path, dpi=150)
+        print(f"Saved chart to {out_path}")
+
+    return fig
+
+
+if __name__ == "__main__":
+    prices, log_returns, portfolio_returns = load_portfolio_returns()
+    plot_return_distribution(portfolio_returns)
