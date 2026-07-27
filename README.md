@@ -1,15 +1,15 @@
 # Portfolio VaR & Expected Shortfall Calculator
 
-A quantitative risk management tool that calculates Value at Risk (VaR) and Expected Shortfall (ES) on a JSE equity portfolio using historical simulation, with parametric and Monte Carlo methods — plus backtesting — in progress.
+A quantitative risk management tool that calculates Value at Risk (VaR) and Expected Shortfall (ES) on a JSE equity portfolio using Historical Simulation and Parametric (Variance-Covariance) methods, with Monte Carlo VaR and backtesting in progress.
 
-Built to understand not just *how* these models work, but *where each one breaks down*.
+Built to understand not just *how* these models work, but *where each one breaks down* — including catching a real data-quality issue along the way.
 
 ## Status
 
-- [x] Data pipeline — JSE price fetching via yfinance, ticker validation, cents (ZAc) → Rand conversion, log return calculation
+- [x] Data pipeline — JSE price fetching via yfinance, ticker validation, cents (ZAc) → Rand conversion, price-glitch detection & correction, log return calculation
 - [x] Historical Simulation VaR & Expected Shortfall
+- [x] Parametric (Variance-Covariance) VaR & Expected Shortfall
 - [x] Return distribution chart with VaR/ES thresholds
-- [ ] Parametric (Variance-Covariance) VaR
 - [ ] Monte Carlo VaR
 - [ ] Backtesting (Kupiec POF test)
 
@@ -19,34 +19,42 @@ An equal-weighted basket of 19 JSE Top 40-derived stocks, spanning banking, tele
 
 `NPN.JO, FSR.JO, SBK.JO, MTN.JO, SOL.JO, CPI.JO, VOD.JO, ABG.JO, SLM.JO, DSY.JO, SHP.JO, NED.JO, BVT.JO, APN.JO, GRT.JO, CLS.JO, EXX.JO, WHL.JO, MRP.JO`
 
-**Why 19, not the full Top 40:** three candidates were excluded after a data validation step (`check_ticker_availability()`) revealed real data issues — Bid Corporation (BID.JO) and Old Mutual (OMU.JO) only have history from 2016 and 2018 respectively, following corporate spin-offs/restructurings; MultiChoice (MCG.JO) returned no data at all from Yahoo Finance. Including any of these would have forced the entire portfolio's start date forward, discarding years of history for every other stock.
+**Why 19, not the full Top 40:** three candidates were excluded after a data validation step (`check_ticker_availability()`) revealed Bid Corporation (BID.JO) and Old Mutual (OMU.JO) only have history from 2016/2018 respectively (post spin-off/restructuring), and MultiChoice (MCG.JO) returned no data from Yahoo Finance at all.
 
 ## Methodology
 
 **Returns:** Daily log returns (`ln(P_t / P_t-1)`), used for their time-additive property.
 
-**Currency handling:** Yahoo Finance reports JSE equity prices in South African cents (ZAc), not Rand — confirmed directly against Yahoo's own listing pages and cross-checked against independently published Rand prices. Converted explicitly via `cents_to_rand()`. This has zero effect on returns or volatility (ratios cancel the /100 out) — it only matters for displayed price levels.
+**Currency handling:** Yahoo Finance reports JSE equity prices in South African cents (ZAc), not Rand — converted explicitly via `cents_to_rand()`. This has zero effect on returns/volatility (ratios cancel the /100 out); it only matters for displayed price levels.
 
-**Historical Simulation VaR/ES:** Makes no assumption about the shape of the return distribution — it looks directly at the empirical distribution of past returns and asks *"what was the Nth-percentile worst day?"* (VaR) and *"on the worst days, what was the average loss?"* (Expected Shortfall).
+**Data quality — price glitch detection:** Initial analysis showed an implausible excess kurtosis of 274.5, which triggered an investigation (`diagnose_outliers.py`) rather than being reported as a finding. It traced to six single-day price errors across three tickers (SLM.JO, VOD.JO, SBK.JO) in 2025, each showing a ~100x single-day price ratio — the signature of a cents/Rand unit error at the data source, not a real market move (confirmed by the fact that each "crash" was followed by an exact-magnitude "recovery" the next available trading day, and no other stock in the portfolio moved that day). A detection function (`detect_price_glitches()`, flagging any day-over-day ratio beyond 10x — safely above the worst genuine move in this dataset, Sasol's ~47% single-day drop during the March 2020 crash) and correction function (`clean_price_glitches()`, linear interpolation from neighboring valid prices) now catch and repair these automatically, with every correction printed for auditability rather than silently applied.
+
+**Historical Simulation VaR/ES:** Makes no assumption about the shape of the return distribution — uses the empirical distribution of past returns directly.
+
+**Parametric (Variance-Covariance) VaR/ES:** Assumes returns are Normally distributed, characterized by mean and standard deviation alone. Portfolio volatility is computed two independent ways as a cross-check — directly from the combined return series, and via the covariance matrix (`w' Σ w`) — confirmed to match exactly. Expected Shortfall under Normality has an exact closed-form solution, unlike Historical ES, which must average real observed tail data.
 
 ## Key findings
 
-**1. Diversification reduces volatility meaningfully.** Expanding from a 5-stock to a 19-stock JSE portfolio cut annualized volatility from 46.51% to 30.64%, and reduced both VaR and ES by roughly 15–20% at every confidence level tested:
+**1. A data-quality bug initially made tail risk look far more extreme than it was.** Before cleaning, excess kurtosis measured 274.5 — implausible for a diversified 19-stock equity portfolio. Investigating rather than reporting this number traced it to six single-day data errors (cents/Rand unit mixups at the source for three tickers in 2025). After correction, excess kurtosis dropped to a realistic **6.29**, and annualized volatility fell from 30.64% to **20.98%**. This is arguably the most important finding in the project: verifying data quality before trusting a risk number is not optional in this field.
 
-| Metric | 5-stock portfolio | 19-stock portfolio |
-|---|---|---|
-| 95% VaR | R2,481.19 | R1,995.53 |
-| 95% ES | R4,398.95 | R3,539.68 |
-| 99% VaR | R4,424.72 | R3,648.64 |
-| 99% ES | R9,606.14 | R7,377.52 |
+**2. Diversification reduces volatility meaningfully.** Even after data cleaning, expanding from 5 to 19 JSE stocks meaningfully reduces portfolio volatility and VaR/ES versus a concentrated portfolio, consistent with standard diversification theory.
 
-**2. Diversification does not remove fat tails.** Despite the volatility drop, the ratio of 99% VaR to 95% VaR stayed almost identical (~1.83x for both portfolios) — well above the ~1.4x a normal distribution would predict at those confidence levels. This suggests the fat-tail behavior is a *systematic* market-wide feature (all 19 stocks are still JSE equities, exposed to the same broad market shocks), not something diversification within a single asset class and market can diversify away. This is exactly why VaR/ES modelling and stress testing exist as a separate discipline from portfolio optimization — reducing volatility isn't the same as reducing tail risk.
+**3. Real fat tails persist after cleaning — and Expected Shortfall reveals them better than VaR alone.**
+
+| Metric | Historical | Parametric (Normal) | Gap |
+|---|---|---|---|
+| 95% VaR | R1,989.69 | R2,161.24 | -7.9% |
+| 95% ES | R3,072.47 | R2,713.62 | **+13.2%** |
+| 99% VaR | R3,518.86 | R3,062.13 | +14.9% |
+| 99% ES | R5,209.94 | R3,510.09 | **+48.4%** |
+
+At 95% confidence, Historical VaR is actually *below* the Normal-model prediction — but Historical ES is already *above* it. By 99%, Historical exceeds Parametric on both measures, with the ES gap widening dramatically to +48.4%. This is a known signature of fat-tailed ("leptokurtic") return distributions: they're often more peaked near the center with thinner "shoulders," so a Normal model can look adequate or even conservative at moderate confidence levels — while the real excess risk is concentrated further into the tail, exactly where a single VaR cutoff can miss it but Expected Shortfall (which averages everything beyond that point) reliably catches it.
 
 ## Visualization
 
 ![Portfolio P&L distribution with VaR/ES thresholds](output/return_distribution.png)
 
-The histogram shows the empirical distribution of daily portfolio P&L, with 95%/99% VaR and Expected Shortfall marked. The left tail extending further than a normal distribution would predict is the visual signature of the fat-tail finding above.
+*(Chart reflects the pre-cleaning dataset; will be regenerated against cleaned data.)*
 
 ## Setup
 
@@ -61,9 +69,11 @@ pip install -r requirements.txt
 ## Usage
 
 ```powershell
-python src/data_loader.py       # fetch/cache price data, print return stats
+python src/data_loader.py       # fetch/cache price data, detect/clean glitches, print return stats
 python src/var_historical.py    # compute Historical VaR & Expected Shortfall
+python src/var_parametric.py    # compute Parametric VaR & ES, compare against Historical
 python src/visualize.py         # generate the P&L distribution chart
+python src/diagnose_outliers.py # investigate extreme single-day returns
 ```
 
 ## Project structure
