@@ -16,9 +16,6 @@ international and local political/currency risk, and a single global
 stress scenario alone would miss the local dimension entirely.
 """
 
-import numpy as np
-
-
 SCENARIOS = {
     "COVID-19 Crash (2020)": {
         "start": "2020-02-20",
@@ -42,7 +39,7 @@ SCENARIOS = {
 }
 
 
-def run_scenario(portfolio_returns, log_returns, start, end, portfolio_value=100_000):
+def run_scenario(portfolio_returns, asset_returns, start, end, portfolio_value=100_000):
     """
     Extracts actual historical returns within [start, end] and applies them
     to the CURRENT portfolio (same weights used throughout this project),
@@ -55,12 +52,9 @@ def run_scenario(portfolio_returns, log_returns, start, end, portfolio_value=100
     if len(window_returns) == 0:
         raise ValueError(f"No trading days found between {start} and {end}. Check the date range.")
 
-    # Log returns are additive, so cumulative log return over the window is
-    # just their sum. Converting back to a simple (%) return for reporting
-    # requires exp() -- this is the inverse of how log returns were built
-    # from prices in the first place (ln(P_t/P_t-1)).
-    cumulative_log_return = window_returns.sum()
-    cumulative_simple_return = np.exp(cumulative_log_return) - 1
+    # The portfolio is rebalanced daily to its target weights, so its value
+    # compounds the daily SIMPLE portfolio returns: prod(1 + r_t) - 1.
+    cumulative_simple_return = (1 + window_returns).prod() - 1
     cumulative_loss = -cumulative_simple_return * portfolio_value
 
     worst_day_return = window_returns.min()
@@ -70,7 +64,7 @@ def run_scenario(portfolio_returns, log_returns, start, end, portfolio_value=100
     # Per-ticker breakdown for the single worst day, so we can see WHICH
     # holdings drove the loss, not just the aggregate number -- the same
     # diagnostic approach used in diagnose_outliers.py.
-    worst_day_ticker_returns = log_returns.loc[worst_day_date].sort_values()
+    worst_day_ticker_returns = asset_returns.loc[worst_day_date].sort_values()
 
     return {
         "start": start,
@@ -88,7 +82,7 @@ def run_scenario(portfolio_returns, log_returns, start, end, portfolio_value=100
 if __name__ == "__main__":
     from data_loader import load_portfolio_returns, PORTFOLIO_VALUE
 
-    prices, log_returns, portfolio_returns = load_portfolio_returns()
+    prices, asset_returns, portfolio_returns = load_portfolio_returns()
 
     print(f"Portfolio value: R{PORTFOLIO_VALUE:,.0f}\n")
 
@@ -99,7 +93,7 @@ if __name__ == "__main__":
         print(f"{scenario['description']}\n")
 
         result = run_scenario(
-            portfolio_returns, log_returns,
+            portfolio_returns, asset_returns,
             scenario["start"], scenario["end"],
             portfolio_value=PORTFOLIO_VALUE,
         )
