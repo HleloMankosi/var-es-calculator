@@ -1,6 +1,6 @@
 # Portfolio VaR & Expected Shortfall Calculator
 
-A quantitative risk management tool that calculates, cross-validates, and backtests Value at Risk (VaR) and Expected Shortfall (ES) on a JSE equity portfolio using Historical Simulation, Parametric (Variance-Covariance), Monte Carlo and volatility-filtered methods, with historical scenario stress testing.
+A quantitative risk management tool that calculates, cross-validates, and backtests Value at Risk (VaR) and Expected Shortfall (ES) on a JSE equity portfolio using Historical Simulation, Parametric (Variance-Covariance), Monte Carlo and volatility-filtered methods, with historical scenario stress testing. A portfolio monitor then turns the models into something usable: a cost-aware rebalance order list and a 1-day risk report for the portfolio you actually hold.
 
 Built to understand not just *how* these models work, but *where each one breaks down* — including catching a real data-quality issue, showing statistically where one method's assumptions fail, and showing that diversification's value depends on the type of shock a portfolio actually faces.
 
@@ -14,6 +14,7 @@ Built to understand not just *how* these models work, but *where each one breaks
 - [x] Kupiec Proportion-of-Failures backtesting
 - [x] Extended backtesting — window-length sensitivity, EWMA and filtered-historical-simulation models, Christoffersen independence and conditional-coverage tests, ES exceedance test, Basel traffic-light zones
 - [x] Historical scenario stress testing (COVID-19, Nenegate)
+- [x] Portfolio monitor — holdings in, cost-aware rebalance orders out, 1-day risk report and VaR-limit check
 
 ## Portfolio
 
@@ -27,7 +28,7 @@ An equal-weighted basket of 19 JSE Top 40-derived stocks, spanning banking, tele
 
 **Returns:** Daily *simple* returns (`P_t / P_t-1 - 1`). The portfolio's daily return is the weighted sum of its stocks' simple returns, which is exactly what a portfolio rebalanced daily to target weights earns. Log returns do not aggregate across assets this way: an earlier version that built the portfolio from log returns overstated the 99% ES by about 5% and the COVID stress loss by about 2 percentage points. Log returns are kept only for diagnostics.
 
-**Currency handling:** Yahoo Finance reports JSE equity prices in South African cents (ZAc), not Rand — converted explicitly via `cents_to_rand()`. This has zero effect on returns/volatility (ratios cancel the /100 out); it only matters for displayed price levels and any future share-count calculation.
+**Currency handling:** Yahoo Finance reports JSE equity prices in South African cents (ZAc), not Rand — converted explicitly via `cents_to_rand()`. This has zero effect on returns/volatility (ratios cancel the /100 out); it only matters for displayed price levels and the share-count calculation in the portfolio monitor.
 
 **Data quality — price glitch detection:** Initial analysis showed an implausible excess kurtosis of 274.5, which triggered an investigation (`diagnose_outliers.py`) rather than being reported as a finding. It traced to three single-day price errors (SLM.JO and VOD.JO on 2025-01-10, SBK.JO on 2025-04-25), each a price at 1/100 of its true level — the signature of a cents/Rand unit error at the data source, not a real market move. `detect_price_glitches()` flags a day-over-day move beyond 10x that reverses on the next day, so only the bad day is flagged. `clean_price_glitches()` then rescales that day by 100 (an exact repair, not an interpolation), prints every correction for auditability, and warns if any extreme move remains unresolved. (An earlier version also flagged the correct following day and overwrote it with an interpolated price; this was found in review and fixed.)
 
@@ -118,6 +119,40 @@ Rather than asking "what could happen" or "what does the model predict," stress 
 
 **Key insight:** the two scenarios reveal fundamentally different risk structures. Global systemic shocks (COVID) move every holding in the same direction — little diversification benefit exists, consistent with tail risk surviving diversification. Local political/currency shocks (Nenegate) show genuine within-portfolio dispersion, where sector composition itself provides a hedge. Diversification's value is shock-dependent, not universal.
 
+## Portfolio monitor (live-use layer)
+
+`portfolio_monitor.py` turns the risk models into something that can be acted on. It does **not** place orders: it prints a list to place manually with live prices from your broker.
+
+- **Holdings in:** reads `private/holdings.csv` (columns `ticker,units`, plus an optional `CASH` row), or assumes a cash amount to invest from scratch with `--capital`.
+- **Rebalance orders out:** compares current weights with the target (equal) weights and trades only on a first investment or when any weight drifts more than 2 percentage points from target, since every trade costs money. Units are rounded down so planned spending never exceeds available cash. Fractional units are the default; `--whole-shares` rounds to whole shares and spends leftover cash on the most under-weight stock it can still afford.
+- **Costs:** estimated brokerage (0.25%, 1c minimum) plus securities transfer tax (0.25%, on purchases only), deducted *before* sizing the trades. Other levies and platform fees are not included, and every rate is a named constant in the file to verify against your broker's current cost profile.
+- **Risk report:** 1-day VaR and ES at 95% and 99% for the portfolio held after the trades, using Historical Simulation and EWMA-FHS (which reflects the current volatility regime), checked against a VaR limit using the larger of the two 99% VaRs.
+- **Privacy:** holdings and the order list live in `private/`, which is git-ignored.
+
+Example: a first investment of R5,000 using the closing prices of 30 October 2026.
+
+```text
+Portfolio value now: R5,000.00   (stocks R0.00, cash R5,000.00)
+REBALANCE TRIGGERED (first investment).
+
+Ticker Price (R) Units now Trade units Trade (R) Cost (R) Weight after Action
+NPN.JO    678.60    0.0000     +0.3858   +261.80     1.31        5.26%    BUY
+CPI.JO  4,610.50    0.0000     +0.0567   +261.42     1.31        5.25%    BUY
+GRT.JO     15.55    0.0000    +16.8391   +261.85     1.31        5.26%    BUY
+... (19 positions in total)
+
+Buys R4,974.50 | Sells R0.00 | Estimated costs R24.87 (0.50% of portfolio) | Cash left R0.63
+
+                          Historical    EWMA-FHS (now)
+99% VaR                      R168.80            R90.31
+99% Expected Shortfall       R246.70           R128.65
+Forecast volatility tomorrow (annualised): 13.0%
+
+Limit check: larger of the two 99% VaRs = R168.80 (3.39% of value) vs limit R199.01 (4.0%) -> WITHIN LIMIT
+```
+
+How to read it: getting invested costs about 0.5% (R24.87) before any return is earned. The historical 99% VaR is about 3.4% of value, while EWMA-FHS gives about half that because forecast volatility (13.0% annualised) is well below the long-run 20.8%, which is why the limit check takes the larger figure. A single CPI.JO share costs over R4,600, so equal weights at this size are only practical with fractional shares. VaR describes a bad day, not a worst case: the COVID stress test above lost about 41%.
+
 ## Visualization
 
 ![Portfolio P&L distribution with VaR/ES thresholds](output/return_distribution.png)
@@ -144,11 +179,12 @@ python src/backtest_extended.py  # window sensitivity, EWMA/FHS models, Christof
 python src/stress_test.py        # historical stress scenarios: COVID-19 crash, Nenegate
 python src/visualize.py          # generate the P&L distribution chart
 python src/diagnose_outliers.py  # investigate extreme single-day returns (uncleaned data)
+python src/portfolio_monitor.py --capital 5000  # rebalance order list + 1-day risk report (add --whole-shares for whole units)
 ```
 
 ## Known limitations
 
-- Assumes daily rebalancing to fixed equal weights, with no transaction costs, brokerage or taxes
+- The VaR/ES models assume daily rebalancing to fixed equal weights with no transaction costs; the portfolio monitor instead rebalances on a 2-percentage-point drift band and models brokerage and securities transfer tax, so live results will differ from the backtests
 - Survivorship bias: the 19 holdings are today's survivors with full history since 2015, so any return statistic from this history is flattered
 - All 19 holdings are JSE equities — no cross-asset-class diversification (bonds, offshore exposure)
 - Historical VaR is bounded by the 2015–present sample window
@@ -159,12 +195,16 @@ python src/diagnose_outliers.py  # investigate extreme single-day returns (uncle
 - Monte Carlo here is largely a validation exercise; it becomes essential once a portfolio includes non-linear instruments (options, etc.)
 - Stress scenarios apply today's weights to past returns: a hypothetical "if held today" test, not a literal historical reconstruction
 - Price data comes from Yahoo Finance via yfinance, an unofficial source
+- The monitor sizes trades from the last close, not live quotes; its cost estimates exclude other regulatory levies, platform fees, dividend withholding tax and capital gains tax
+- The 4% VaR limit is a placeholder, not a recommendation, and target weights are simply equal
+- The monitor has not been validated against a live trading record; it should be paper traded before real money is used. This project is not financial advice
 
 ## Roadmap
 
+- Paper-trading log: record each week's recommended orders and holdings, and compare with actual prices
 - Bootstrap confidence intervals for VaR/ES
 - GARCH-family volatility (e.g. GJR-GARCH with Student-t errors) as a further comparison
 - Re-measure the 5-stock vs 19-stock diversification effect on cleaned data
 - A diversifying asset (bond, money-market or offshore ETF) and risk-optimized weights
-- Live-use layer: holdings input, share counts, weight drift, rebalance rule with costs, and a weekly VaR/ES monitoring report
+- Scheduled weekly report and alerting when the VaR limit is breached
 - Additional stress scenarios (e.g. 2018 EM selloff, load-shedding-driven periods)
