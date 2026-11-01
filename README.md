@@ -1,8 +1,8 @@
 # Portfolio VaR & Expected Shortfall Calculator
 
-A quantitative risk management tool that calculates, cross-validates, and backtests Value at Risk (VaR) and Expected Shortfall (ES) on a JSE equity portfolio using Historical Simulation, Parametric (Variance-Covariance), and Monte Carlo methods, with historical scenario stress testing.
+A quantitative risk management tool that calculates, cross-validates, and backtests Value at Risk (VaR) and Expected Shortfall (ES) on a JSE equity portfolio using Historical Simulation, Parametric (Variance-Covariance), Monte Carlo and volatility-filtered methods, with historical scenario stress testing.
 
-Built to understand not just *how* these models work, but *where each one breaks down* — including catching a real data-quality issue, showing statistically that one method's assumptions fail where it matters most, and showing that diversification's value depends on the type of shock a portfolio actually faces.
+Built to understand not just *how* these models work, but *where each one breaks down* — including catching a real data-quality issue, showing statistically where one method's assumptions fail, and showing that diversification's value depends on the type of shock a portfolio actually faces.
 
 ## Status
 
@@ -12,6 +12,7 @@ Built to understand not just *how* these models work, but *where each one breaks
 - [x] Monte Carlo VaR & ES (Gaussian and Bootstrap variants)
 - [x] Return distribution chart with VaR/ES thresholds
 - [x] Kupiec Proportion-of-Failures backtesting
+- [x] Extended backtesting — window-length sensitivity, EWMA and filtered-historical-simulation models, Christoffersen independence and conditional-coverage tests, ES exceedance test, Basel traffic-light zones
 - [x] Historical scenario stress testing (COVID-19, Nenegate)
 
 ## Portfolio
@@ -38,13 +39,22 @@ An equal-weighted basket of 19 JSE Top 40-derived stocks, spanning banking, tele
 
 **Monte Carlo VaR/ES:** Two variants. *Gaussian Monte Carlo* simulates 100,000 correlated daily scenarios via Cholesky decomposition of the covariance matrix, cross-checking the Parametric implementation. *Bootstrap Monte Carlo* resamples actual historical days with replacement, cross-checking the Historical implementation.
 
-**Kupiec Proportion-of-Failures backtesting:** Rather than comparing methods only to each other, this tests whether each method's VaR would have held up against real outcomes. It uses a rolling 250-trading-day window — VaR on any given day is estimated ONLY from the preceding 250 days, never from future data, avoiding the look-ahead bias of testing a model on the sample it was fit on. It counts "breaches" (days where the actual loss exceeded the VaR threshold) and tests via the Kupiec likelihood-ratio statistic whether the observed breach rate is statistically consistent with the model's stated confidence level.
+**Kupiec Proportion-of-Failures backtesting (`backtest.py`):** Rather than comparing methods only to each other, this tests whether each method's VaR would have held up against real outcomes. It uses a rolling 250-trading-day window — VaR on any given day is estimated ONLY from the preceding 250 days, never from future data, avoiding the look-ahead bias of testing a model on the sample it was fit on. It counts "breaches" (days where the actual loss exceeded the VaR threshold) and tests via the Kupiec likelihood-ratio statistic whether the observed breach rate is statistically consistent with the model's stated confidence level.
+
+**Extended backtesting (`backtest_extended.py`):** Adds five things on top of Kupiec.
+- *Window sensitivity:* repeats the Historical and Parametric tests with 125-, 250-, 500- and 750-day windows.
+- *Time-varying volatility:* two further models. **EWMA-Normal** uses a Normal distribution with an exponentially weighted volatility (RiskMetrics, λ = 0.94). **EWMA-FHS** (filtered historical simulation) divides each past return by the volatility forecast for its own day, takes the empirical quantile of those standardised returns, and rescales it by today's volatility forecast, so it reacts to volatility regimes while keeping the real fat tails.
+- *Christoffersen tests:* Kupiec only counts breaches; the independence test asks whether breaches cluster in time, and conditional coverage combines both.
+- *ES exceedance test (McNeil–Frey style):* on breach days, the realised loss minus the predicted ES, scaled by the rolling standard deviation, is tested for a zero mean against the alternative that it is positive (ES too low).
+- *Basel traffic light:* 99% VaR breach counts over rolling 250-day windows, classed green (0–4), yellow (5–9) or red (10+).
+
+All four models are compared on the same 2,675 days (2016-03-11 to 2026-10-30), which start 60 days later than `backtest.py` because EWMA needs a burn-in. No forecast uses data from its own day or later.
 
 **Historical scenario stress testing:** Re-applies actual historical crisis returns to the current portfolio composition and weights, compounding the daily portfolio returns (`prod(1 + r) - 1`, consistent with daily rebalancing) — answering "if this exact event happened again today, what would we lose?"
 
 ## Key findings
 
-*Figures are from the 30 October 2026 run (2,986 trading days from 1 January 2015, R100,000 portfolio) and shift slightly as the data refreshes.*
+*Figures are from the 30 October 2026 run (2,986 trading days from 1 January 2015, R100,000 portfolio) and shift slightly as the data refreshes. In the test tables, \* marks rejection at the 5% level.*
 
 **1. A data-quality bug initially made tail risk look far more extreme than it was.** Before cleaning, excess kurtosis measured 274.5 — implausible for a diversified 19-stock equity portfolio. Investigating rather than reporting this number traced it to three single-day cents/Rand unit errors in 2025. After correction, excess kurtosis fell to a realistic **5.72** and annualized volatility is **20.78%**. Verifying data quality before trusting a risk number is not optional in this field.
 
@@ -61,7 +71,42 @@ An equal-weighted basket of 19 JSE Top 40-derived stocks, spanning banking, tele
 
 **3. The cross-checks validate the implementations.** There are two modelling families here (Normal-assumption and empirical), each implemented twice. Gaussian Monte Carlo matched Parametric within 0.12% on VaR (0.65% on 99% ES); Bootstrap Monte Carlo matched Historical within 0.73% on VaR (up to 2.3% on 99% ES, as expected from sampling noise in the extreme tail). The ~13%/~44% gap between the two families persisted, so the fat-tail effect is a property of the data, not a calculation quirk.
 
-**4. Backtesting shows the Parametric model under-covers at 99%.** Using a rolling 250-day window across 2,735 out-of-sample observations, Kupiec's test could not reject Historical VaR at either confidence level (95%: 149 breaches vs 136.8 expected, p = 0.29; 99%: 32 vs 27.4, p = 0.38). Parametric VaR passed at 95% (127 breaches, p = 0.39) but was **rejected at 99% (p = 0.0091)**: it breached 42 times against 27.4 expected, about 54% more often than its stated confidence implies. 99% VaR is the long-standing Basel market-risk standard (the newer FRTB framework moved to 97.5% ES), so this is the tail that matters for capital. This is statistical evidence of under-coverage, not a proof; the result may depend on window length, which has not yet been tested.
+**4. Kupiec backtest (rolling 250 days, 2,735 out-of-sample days).** Historical VaR was not rejected at either confidence level (95%: 149 breaches vs 136.8 expected, p = 0.29; 99%: 32 vs 27.4, p = 0.38). Parametric VaR passed at 95% (127 breaches, p = 0.39) but was **rejected at 99% (42 breaches vs 27.4 expected, about 53% more than its stated confidence implies, p = 0.0091)**. 99% VaR is the long-standing Basel market-risk standard (the newer FRTB framework moves the capital measure to 97.5% ES), so this is the tail that matters for capital.
+
+**5. The Parametric result is consistent but fragile to how it is tested.** Across window lengths, Parametric 99% VaR has more breaches than expected every time, but the Kupiec test only rejects it at some windows:
+
+| Window | 99% expected | Historical (p) | Parametric (p) |
+|---|---|---|---|
+| 125 days | 28.6 | 52 (0.000\*) | 51 (0.000\*) |
+| 250 days | 27.4 | 32 (0.384) | 42 (0.009\*) |
+| 500 days | 24.9 | 27 (0.669) | 32 (0.168) |
+| 750 days | 22.4 | 24 (0.729) | 28 (0.248) |
+
+On the shared 2,675-day sample used for model comparison, Parametric 99% scores 37 breaches against 26.8 expected (p = 0.060). The honest summary is persistent under-coverage at 99%, not a single decisive p-value. At 95%, long windows make the Normal model too cautious instead (750 days: 82 breaches vs 111.8 expected, p = 0.002\*), while Historical with only 125 days has too few tail observations (about one or two at 99%) and fails at both levels.
+
+**6. Passing Kupiec is not enough: breaches cluster and ES is too low.** At 99% on the shared sample:
+
+| Method | Breaches (exp. 26.8) | Kupiec p | Independence p | Cond. coverage p | ES test p | Realised ÷ predicted ES |
+|---|---|---|---|---|---|---|
+| Historical | 30 | 0.536 | 0.004\* | 0.013\* | 0.013\* | 1.14 |
+| Parametric | 37 | 0.060 | 0.001\* | 0.001\* | 0.000\* | 1.31 |
+| EWMA-Normal | 46 | 0.001\* | 0.008\* | 0.000\* | 0.002\* | 1.12 |
+| EWMA-FHS | 35 | 0.126 | 0.086 | 0.071 | 0.370 | 1.01 |
+
+Historical VaR has about the right number of breaches, but they bunch together in volatile periods, and its ES understates the average breach-day loss by 14%. Parametric understates it by 31% at 99% and by 16% at 95% (95% ES test p < 0.001, even though its 95% VaR passes Kupiec).
+
+**7. Time-varying volatility helps only when paired with empirical tails.** EWMA-Normal reacts to volatility but still assumes Normal tails, and it was the worst model at 99% (46 breaches against 26.8). EWMA-FHS, which combines the faster volatility forecast with the empirical shape of the tails, was the only model not rejected on any test at 99%, and its ES matched realised losses almost exactly (ratio 1.01). At 95%, Historical and EWMA-FHS both passed every test (EWMA-FHS ES ratio 1.01; Historical 1.03), while the two Normal-based models had ES rejected (p < 0.001). Caveats: with about 27 expected breaches the tests have limited power, EWMA-FHS's independence and conditional-coverage p-values (0.086, 0.071) sit not far above 0.05, λ = 0.94 was not tuned, and the four models were compared on the same sample with no separate validation period, so this is "best of four on this history", not a proof of future performance.
+
+**8. Basel traffic light (99% VaR, rolling 250-day breach counts).**
+
+| Method | Latest 250 days | Worst 250 days | % green | % yellow | % red |
+|---|---|---|---|---|---|
+| Historical | 1 (green) | 8 | 79% | 21% | 0% |
+| Parametric | 2 (green) | 11 | 72% | 19% | 9% |
+| EWMA-Normal | 2 (green) | 10 | 55% | 44% | 1% |
+| EWMA-FHS | 2 (green) | 7 | 75% | 25% | 0% |
+
+All four models are in the green zone for the most recent year. Over the full history only Parametric (and, briefly, EWMA-Normal) reached the red zone, which in a regulatory setting would trigger a capital add-on.
 
 ## Stress Testing
 
@@ -80,7 +125,7 @@ Rather than asking "what could happen" or "what does the model predict," stress 
 ## Setup
 
 ```powershell
-git clone https://github.com/<your-username>/var-es-calculator.git
+git clone https://github.com/HleloMankosi/var-es-calculator.git
 cd var-es-calculator
 python -m venv venv
 .\venv\Scripts\Activate.ps1
@@ -90,14 +135,15 @@ pip install -r requirements.txt
 ## Usage
 
 ```powershell
-python src/data_loader.py       # fetch/cache price data, detect/clean glitches, print return stats
-python src/var_historical.py    # compute Historical VaR & Expected Shortfall
-python src/var_parametric.py    # compute Parametric VaR & ES, compare against Historical
-python src/var_monte_carlo.py   # compute Monte Carlo VaR & ES (Gaussian + Bootstrap), cross-validate
-python src/backtest.py          # Kupiec POF backtesting: rolling-window validation against real outcomes
-python src/stress_test.py       # historical stress scenarios: COVID-19 crash, Nenegate
-python src/visualize.py         # generate the P&L distribution chart
-python src/diagnose_outliers.py # investigate extreme single-day returns (uncleaned data)
+python src/data_loader.py        # fetch/cache price data, detect/clean glitches, print return stats
+python src/var_historical.py     # compute Historical VaR & Expected Shortfall
+python src/var_parametric.py     # compute Parametric VaR & ES, compare against Historical
+python src/var_monte_carlo.py    # compute Monte Carlo VaR & ES (Gaussian + Bootstrap), cross-validate
+python src/backtest.py           # Kupiec POF backtesting: rolling-window validation against real outcomes
+python src/backtest_extended.py  # window sensitivity, EWMA/FHS models, Christoffersen, ES test, Basel zones
+python src/stress_test.py        # historical stress scenarios: COVID-19 crash, Nenegate
+python src/visualize.py          # generate the P&L distribution chart
+python src/diagnose_outliers.py  # investigate extreme single-day returns (uncleaned data)
 ```
 
 ## Known limitations
@@ -106,18 +152,18 @@ python src/diagnose_outliers.py # investigate extreme single-day returns (unclea
 - Survivorship bias: the 19 holdings are today's survivors with full history since 2015, so any return statistic from this history is flattered
 - All 19 holdings are JSE equities — no cross-asset-class diversification (bonds, offshore exposure)
 - Historical VaR is bounded by the 2015–present sample window
-- Backtesting uses a fixed 250-day rolling window; sensitivity to window length is not yet tested
-- Kupiec tests only how many breaches occurred, not whether they cluster in time, and does not test ES
+- The model comparison uses one sample for both comparing and judging models, with no separate validation period; EWMA's λ = 0.94 is the RiskMetrics default and was not tuned
+- At 99%, only about 27 breaches are expected, so every backtest has limited statistical power, and the ES test is a simple exceedance test, not a full ES validation framework
 - 99% ES rests on about 30 tail observations and is reported without confidence intervals
+- GARCH-family models have not been fitted; EWMA is the simpler time-varying-volatility benchmark
 - Monte Carlo here is largely a validation exercise; it becomes essential once a portfolio includes non-linear instruments (options, etc.)
 - Stress scenarios apply today's weights to past returns: a hypothetical "if held today" test, not a literal historical reconstruction
 - Price data comes from Yahoo Finance via yfinance, an unofficial source
 
 ## Roadmap
 
-- Time-varying volatility (EWMA / GARCH / filtered historical simulation) to test whether it closes the Parametric gap
-- Christoffersen independence test and an ES backtest; window-length sensitivity; Basel traffic-light classification
 - Bootstrap confidence intervals for VaR/ES
+- GARCH-family volatility (e.g. GJR-GARCH with Student-t errors) as a further comparison
 - Re-measure the 5-stock vs 19-stock diversification effect on cleaned data
 - A diversifying asset (bond, money-market or offshore ETF) and risk-optimized weights
 - Live-use layer: holdings input, share counts, weight drift, rebalance rule with costs, and a weekly VaR/ES monitoring report
